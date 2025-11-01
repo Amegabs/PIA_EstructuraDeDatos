@@ -12,24 +12,66 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
+def verificar_estado_inicial():
+    """Verifica si existe un estado previo de la base de datos y muestra mensaje al usuario"""
+    base_datos = "coworking.db"
+
+    if not os.path.exists(base_datos):
+        print(
+            "No se encontró una versión anterior. Iniciando con un estado inicial vacío."
+        )
+        return False
+    else:
+        try:
+            with sqlite3.connect(base_datos) as conexion:
+                cursor = conexion.cursor()
+                cursor.execute("SELECT COUNT(*) FROM Clientes")
+                clientes = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM Salas")
+                salas = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM Reservaciones")
+                reservaciones = cursor.fetchone()[0]
+
+                if clientes == 0 and salas == 0 and reservaciones == 0:
+                    print(
+                        "No se encontraron datos previos. Iniciando con un estado inicial vacío."
+                    )
+                    return False
+                else:
+                    print(
+                        "Se encontró un estado previo con datos. Continuando con la sesión."
+                    )
+                    return True
+        except Exception as e:
+            print(f"No se pudo verificar el estado previo: {e}")
+            return False
+
+
 def iniciar_bd():
     """Funcion que crea la base de datos y las tablas"""
     try:
         with sqlite3.connect("coworking.db") as conexion:
             cursor = conexion.cursor()
             cursor.execute(
-                """CREATE TABLE IF NOT EXISTS Clientes (id_cliente INTEGER PRIMARY KEY, nombre TEXT NOT NULL, apellido Text NOT NULL)"""
+                """CREATE TABLE IF NOT EXISTS Clientes (id_cliente INTEGER PRIMARY KEY, nombre TEXT NOT NULL, apellido TEXT NOT NULL)"""
             )
             cursor.execute(
                 """CREATE TABLE IF NOT EXISTS Salas (id_sala INTEGER PRIMARY KEY, nombre TEXT NOT NULL, cupo INTEGER NOT NULL)"""
             )
             cursor.execute(
-                """CREATE TABLE IF NOT EXISTS Reservaciones (id_reservaciones INTEGER PRIMARY KEY, id_cliente INTEGER NOT NULL,
-                 id_sala INTEGER NOT NULL, fecha TEXT NOT NULL, turno TEXT NOT NULL, evento TEXT NOT NULL, cancelada INTEGER DEFAULT 0,
-                   FOREIGN KEY(id_cliente) REFERENCES Clientes(id_cliente), FOREIGN KEY(id_sala) REFERENCES Salas(id_sala))"""
+                "CREATE TABLE IF NOT EXISTS Turnos (id_turno INTEGER PRIMARY KEY, turno TEXT NOT NULL)"
             )
-            print("TABLAS CREADAS EXITOSAMENTE.")
-            main()
+            cursor.execute(
+                """CREATE TABLE IF NOT EXISTS Reservaciones (id_reservaciones INTEGER PRIMARY KEY, id_cliente INTEGER NOT NULL,
+                 id_sala INTEGER NOT NULL, fecha TEXT, id_turno INTEGER, evento TEXT NOT NULL, estatus TEXT NOT NULL DEFAULT 'Activa',
+                   FOREIGN KEY(id_cliente) REFERENCES Clientes(id_cliente), FOREIGN KEY(id_sala) REFERENCES Salas(id_sala), FOREIGN KEY(id_turno) REFERENCES Turnos(id_turno))"""
+            )
+            cursor.execute("SELECT COUNT(*) FROM Turnos")
+            if cursor.fetchone()[0] == 0:
+                cursor.executemany(
+                    "INSERT INTO Turnos (id_turno, turno) VALUES (?, ?)",
+                    [(1, "Matutino"), (2, "Vespertino"), (3, "Nocturno")],
+                )
     except Error as e:
         print(e)
     except Exception as e:
@@ -190,6 +232,7 @@ def registrar_reservacion():
         try:
             Hoy = datetime.date.today()
             Fecha_evento = datetime.datetime.strptime(Fecha_str, "%m-%d-%Y").date()
+            fecha_sql = Fecha_evento.strftime("%Y-%m-%d")
             FechaAnticipada = (Fecha_evento - Hoy).days
 
             if FechaAnticipada < 2:
@@ -237,53 +280,52 @@ def registrar_reservacion():
                 )
                 continue
 
-    intentos_turno = 0
+    try:
+        with sqlite3.connect("coworking.db") as conexion:
+            cursor = conexion.cursor()
+            cursor.execute("SELECT id_turno, turno FROM Turnos")
+            turnos = cursor.fetchall()
+    except Error as e:
+        print(e)
+        return
+    print("*" * 20)
+    print(f"{'POSIBLES TURNOS':^20}")
+    print("*" * 20)
+    for turno in turnos:
+        print(f"{turno[0]} : {turno[1]}")
+    else:
+        print("*" * 20)
+
     while True:
-        turno = (
-            input("Que turno desea? (Matutino/Vespertino/Nocturno): ").lower().strip()
-        )
+        turno = input(
+            "Selecciona el ID del turno a escoger (ENTER para volver al menu): "
+        ).strip()
         if turno == "":
-            intentos_turno += 1
-            if intentos_turno >= 2:
-                print(
-                    "No ingresaste un turno. Presiona ENTER para volver a menu o ingresa nuevamente."
-                )
-                entrada = (
-                    input("Que turno desea? (Matutino/Vespertino/Nocturno): ")
-                    .lower()
-                    .strip()
-                )
-                if entrada == "":
-                    return
-                turno = entrada
-            else:
-                print("No se ingresó un turno. Inténtalo de nuevo.")
-                continue
-
-        if turno not in ["matutino", "vespertino", "nocturno"]:
-            intentos_turno += 1
-            print("Turno inválido. Intenta nuevamente.")
+            print("No ingresaste un turno. Volviendo al menu.")
+            return
+        try:
+            id_turno = int(turno)
+        except ValueError:
+            print("Debe ingresar un numero valido.")
             continue
-
+        if not any(turno[0] == id_turno for turno in turnos):
+            print("Turno no encontrado. Intente nuevamente.")
+            continue
         try:
             with sqlite3.connect("coworking.db") as conexion:
                 cursor = conexion.cursor()
                 cursor.execute(
-                    "SELECT * FROM Reservaciones WHERE id_sala=? AND fecha=? AND turno=?",
-                    (id_sala, Fecha_evento.strftime("%m-%d-%Y"), turno),
+                    "SELECT * FROM Reservaciones WHERE id_sala=? AND fecha=? AND id_turno=?",
+                    (id_sala, fecha_sql, id_turno),
                 )
                 ocupado = cursor.fetchone()
+            if ocupado:
+                print("Esta sala ya esta reservada en esta fecha y turno. Elija otro.")
+                continue
+            break
         except Error as e:
             print(e)
             return
-
-        if ocupado:
-
-            print(
-                "Esta sala ya está reservada en esta fecha y turno. Intenta otro turno o presiona ENTER para salir."
-            )
-            continue
-        break
 
     intentos_evento = 0
     while True:
@@ -312,18 +354,17 @@ def registrar_reservacion():
             cursor = conexion.cursor()
             cursor.execute(
                 """
-                INSERT INTO Reservaciones (id_cliente, id_sala, fecha, turno, evento)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO Reservaciones (id_cliente, id_sala, fecha, id_turno, evento, estatus)
+                VALUES (?, ?, ?, ?, ?, 'Activa')
             """,
                 (
                     id_cliente,
                     id_sala,
-                    Fecha_evento.strftime("%d-%m-%Y"),
-                    turno,
+                    fecha_sql,
+                    id_turno,
                     nombre_evento,
                 ),
             )
-            conexion.commit()
             print("Reservación registrada exitosamente.")
     except Error as e:
         print(e)
@@ -375,14 +416,18 @@ def editar_reservacion():
             continue
         break
 
-    fecha_inicio_iso = fecha_inicio.strftime("%m-%d-%Y")
-    fecha_fin_iso = fecha_fin.strftime("%m-%d-%Y")
+    fecha_inicio_iso = fecha_inicio.strftime("%Y-%m-%d")
+    fecha_fin_iso = fecha_fin.strftime("%Y-%m-%d")
 
     try:
         with sqlite3.connect("coworking.db") as conexion:
             cursor = conexion.cursor()
             cursor.execute(
-                """SELECT id_reservaciones, id_cliente, id_sala, fecha, turno, evento FROM Reservaciones WHERE fecha BETWEEN ? AND ?""",
+                """SELECT r.id_reservaciones, c.nombre || ' ' || c.apellido AS cliente, r.id_sala, r.fecha, t.turno, r.evento
+                    FROM Reservaciones r
+                    JOIN Clientes c ON r.id_cliente = c.id_cliente
+                    JOIN Turnos t ON r.id_turno = t.id_turno
+                    WHERE r.fecha BETWEEN ? AND ?""",
                 (fecha_inicio_iso, fecha_fin_iso),
             )
             reservaciones = cursor.fetchall()
@@ -394,23 +439,23 @@ def editar_reservacion():
         print("No se encontraron reservaciones en el rango indicado.")
         return
 
-    print("*" * 97)
-    print(f"**{'RESERVACIONES ENCONTRADAS':^92}** ")
-    print("*" * 97)
+    print("*" * 104)
+    print(f"**{'RESERVACIONES ENCONTRADAS':^100}** ")
+    print("*" * 104)
     print(
-        "{:<20} {:<15} {:<15} {:<12} {:<10} {:<30}".format(
-            "Clave Reservacion",
-            "Clave cliente",
-            "Clave sala",
+        "{:<12} {:<35} {:<10} {:<12} {:<10} {:<25}".format(
+            "ID Reserva",
+            "Cliente",
+            "ID Sala",
             "Fecha",
             "Turno",
             "Nombre evento",
         )
     )
-    print("*" * 97)
+    print("*" * 104)
     for reserva in reservaciones:
         print(
-            "{:<20} {:<15} {:<15} {:<12} {:<10} {:<30}".format(
+            "{:<12} {:<35} {:<10} {:<12} {:<10} {:<25}".format(
                 reserva[0],
                 reserva[1],
                 reserva[2],
@@ -420,7 +465,7 @@ def editar_reservacion():
             )
         )
     else:
-        print("*" * 97)
+        print("*" * 104)
 
     intento_reservacion = 0
     while True:
@@ -483,112 +528,9 @@ def editar_reservacion():
                 "UPDATE Reservaciones SET evento=? WHERE id_reservaciones=?",
                 (nuevo_nombre, clave_editar),
             )
-            conexion.commit()
             print("Nombre del evento actualizado con éxito.")
     except Error as e:
         print(f"Error en la base de datos: {e}")
-
-def cancelar_reservacion():
-    """Permite cancelar una reservación con al menos 2 días de anticipación."""
-    intento_fecha1 = 0
-    while True:
-        fecha_inicio_str = input("Ingresa la fecha de inicio (MM-DD-AAAA): ").strip()
-        if fecha_inicio_str == "":
-            print("Operación cancelada.")
-            return
-        try:
-            fecha_inicio = datetime.datetime.strptime(fecha_inicio_str, "%m-%d-%Y").date()
-            break
-        except ValueError:
-            intento_fecha1 += 1
-            print("Formato incorrecto. Usa MM-DD-AAAA.")
-            if intento_fecha1 >= 2:
-                return
-
-    intento_fecha2 = 0
-    while True:
-        fecha_fin_str = input("Ingresa la fecha de fin (MM-DD-AAAA): ").strip()
-        if fecha_fin_str == "":
-            print("Operación cancelada.")
-            return
-        try:
-            fecha_fin = datetime.datetime.strptime(fecha_fin_str, "%m-%d-%Y").date()
-            if fecha_fin < fecha_inicio:
-                print("La fecha final no puede ser menor que la fecha inicial.")
-                continue
-            break
-        except ValueError:
-            intento_fecha2 += 1
-            print("Formato incorrecto. Usa MM-DD-AAAA.")
-            if intento_fecha2 >= 2:
-                return
-
-    try:
-        with sqlite3.connect("coworking.db") as conexion:
-            cursor = conexion.cursor()
-            cursor.execute(
-                """SELECT id_reservaciones, id_cliente, id_sala, fecha, turno, evento
-                   FROM Reservaciones
-                   WHERE cancelada=0 AND fecha BETWEEN ? AND ?""",
-                (fecha_inicio.strftime("%m-%d-%Y"), fecha_fin.strftime("%m-%d-%Y")),
-            )
-            reservaciones = cursor.fetchall()
-    except Error as e:
-        print(e)
-        return
-
-    if not reservaciones:
-        print("No se encontraron reservaciones en el rango indicado.")
-        return
-
-    print("*" * 95)
-    print(f"**{'RESERVACIONES DISPONIBLES PARA CANCELAR':^91}** ")
-    print("*" * 95)
-    print("{:<10} {:<10} {:<10} {:<12} {:<12} {:<30}".format("ID", "Cliente", "Sala", "Fecha", "Turno", "Evento"))
-    print("*" * 95)
-    for reserva in reservaciones:
-        print("{:<10} {:<10} {:<10} {:<12} {:<12} {:<30}".format(*reserva))
-    print("*" * 95)
-
-    clave = input("\nIngrese el ID de la reservación que desea cancelar: ").strip()
-    if not clave.isdigit():
-        print("Clave inválida.")
-        return
-
-    clave = int(clave)
-    if clave not in [r[0] for r in reservaciones]:
-        print("Reservación no encontrada en el rango indicado.")
-        return
-
-    fecha_reserva = None
-    for r in reservaciones:
-        if r[0] == clave:
-            fecha_reserva = datetime.datetime.strptime(r[3], "%m-%d-%Y").date()
-            break
-
-    if not fecha_reserva:
-        print("Error al obtener la fecha de la reservación.")
-        return
-
-    hoy = datetime.date.today()
-    diferencia = (fecha_reserva - hoy).days
-    if diferencia < 2:
-        print("Solo pueden cancelarse reservaciones con al menos 2 días de anticipación.")
-        return
-
-    confirmar = input("¿Desea confirmar la cancelación? (S/N): ").strip().upper()
-    if confirmar != "S":
-        print("Operación cancelada.")
-        return
-
-    try:
-        with sqlite3.connect("coworking.db") as conexion:
-            cursor = conexion.cursor()
-            cursor.execute("UPDATE Reservaciones SET cancelada=1 WHERE id_reservaciones=?", (clave,))
-            conexion.commit()
-            print("Reservación cancelada correctamente. La disponibilidad ha sido liberada.")
-    except Error as e:
-        print(f"Error al cancelar la reservación: {e}")
 
 
 def consultar_reservacion():
@@ -599,35 +541,40 @@ def consultar_reservacion():
             if fecha_inicio_str == "":
                 print("Consulta cancelada.")
                 return
-            try:
-                fecha_inicio = datetime.datetime.strptime(
-                    fecha_inicio_str, "%m-%d-%Y"
-                ).date()
-                break
-            except ValueError:
-                print("Formato incorrecto. Use MM-DD-AAAA. Intente nuevamente.")
+            fecha_inicio = datetime.datetime.strptime(
+                fecha_inicio_str, "%m-%d-%Y"
+            ).date()
+            break
 
         while True:
             fecha_fin_str = input("Ingrese la fecha final (MM-DD-AAAA): ").strip()
             if fecha_fin_str == "":
                 print("Consulta cancelada.")
                 return
-            try:
-                fecha_fin = datetime.datetime.strptime(fecha_fin_str, "%m-%d-%Y").date()
-                if fecha_fin < fecha_inicio:
-                    print("La fecha final no puede ser menor que la fecha inicial.")
-                    continue
-                break
-            except ValueError:
-                print("Formato incorrecto. Use MM-DD-AAAA. Intente nuevamente.")
+            fecha_fin = datetime.datetime.strptime(fecha_fin_str, "%m-%d-%Y").date()
+            if fecha_fin < fecha_inicio:
+                print("La fecha final no puede ser menor que la fecha inicial.")
+                continue
+            break
+    except ValueError:
+        print("Formato incorrecto. Use MM-DD-AAAA. Intente nuevamente.")
 
+    fecha_inicio_iso = fecha_inicio.strftime("%Y-%m-%d")
+    fecha_fin_iso = fecha_fin.strftime("%Y-%m-%d")
+
+    try:
         with sqlite3.connect("coworking.db") as conexion:
             cursor = conexion.cursor()
-            cursor.execute("SELECT * FROM Reservaciones WHERE cancelada=0")
+            cursor.execute(
+                """SELECT r.id_reservaciones, c.nombre || ' ' || c.apellido AS cliente, r.id_sala, r.fecha, t.turno, r.evento
+                            FROM Reservaciones r
+                            JOIN Clientes c ON r.id_cliente = c.id_cliente
+                            JOIN Turnos t ON r.id_turno = t.id_turno
+                            WHERE r.estatus = 'Activa'
+                            AND r.fecha BETWEEN ? AND ?""",
+                (fecha_inicio_iso, fecha_fin_iso),
+            )
             filas = cursor.fetchall()
-
-    except ValueError:
-        print("Formato incorrecto, use MM-DD-AAAA.")
     except Error as e:
         print(e)
         return
@@ -636,61 +583,55 @@ def consultar_reservacion():
         print("No hay reservaciones registradas.")
         return
 
-    print("*" * 74)
-    print(f"**{'RESERVACIONES ENCONTRADAS':^70}**")
-    print("*" * 74)
+    print("*" * 104)
+    print(f"**{'RESERVACIONES ENCONTRADAS':^100}**")
+    print("*" * 104)
     print(
-        "{:<12} {:<10} {:<10} {:<12} {:<10} {:<20}".format(
-            "Id Reserva", "Id Cliente", "Id Sala", "Fecha", "Turno", "Evento"
+        "{:<12} {:<35} {:<10} {:<12} {:<10} {:<25}".format(
+            "Id Reserva", "Cliente", "Id Sala", "Fecha", "Turno", "Evento"
         )
     )
-    print("*" * 74)
+    print("*" * 104)
 
-    encontrados = False
     for fila in filas:
-        fecha_evento = (
-            datetime.datetime.strptime(fila[3], "%m-%d-%Y").date()
-            if "-" in fila[3]
-            else datetime.datetime.strptime(fila[3], "%m-%d-%Y").date()
+        fecha_evento = datetime.datetime.strptime(fila[3], "%Y-%m-%d").strftime(
+            "%m-%d-%Y"
         )
-        if fecha_inicio <= fecha_evento <= fecha_fin:
-            print("{:<12} {:<10} {:<10} {:<12} {:<10} {:<20}".format(*fila))
-            encontrados = True
-    else:
-        print("*" * 74)
-
-    if not encontrados:
         print(
-            f"No hay reservaciones entre {fecha_inicio.strftime('%m-%d-%Y')} y {fecha_fin.strftime('%m-%d-%Y')}."
+            "{:<12} {:<35} {:<10} {:<12} {:<10} {:<25}".format(
+                fila[0], fila[1], fila[2], fecha_evento, fila[4], fila[5]
+            )
         )
-        print("No hay reservaciones para esa fecha.")
     else:
-        while True:
-            try:
-                print("\n¿Deseas exportar los datos?")
-                print("1. Exportar a CSV")
-                print("2. Exportar a Excel")
-                print("3. Exportar a JSON")
-                print("4. No exportar")
-                opcion = input("Selecciona una opción: ")
-                if opcion.isdigit():
-                    if opcion == "1":
-                        exportar_csv()
-                    elif opcion == "2":
-                        exportar_excel()
-                    elif opcion == "3":
-                        exportar_json()
-                    elif opcion == "4":
-                        print("No se exportaron los datos.")
-                        break
-                    else:
-                        print("Error, ingresa una opcion valida")
+        print("*" * 104)
+
+    while True:
+        try:
+            print("\n¿Deseas exportar los datos?")
+            print("1. Exportar a CSV")
+            print("2. Exportar a Excel")
+            print("3. Exportar a JSON")
+            print("4. No exportar")
+            opcion = input("Selecciona una opción: ")
+            if opcion.isdigit():
+                if opcion == "1":
+                    exportar_csv()
+                    break
+                elif opcion == "2":
+                    exportar_excel()
+                    break
+                elif opcion == "3":
+                    exportar_json()
+                    break
+                elif opcion == "4":
+                    print("No se exportaron los datos.")
+                    break
                 else:
-                    print(
-                        "No ingresaste una opcion valida. No se exportaran los datos."
-                    )
-            except ValueError:
-                print("Opcion no valida. No se exportaran los datos.")
+                    print("Error, ingresa una opcion valida")
+            else:
+                print("No ingresaste una opcion valida. No se exportaran los datos.")
+        except ValueError:
+            print("Opcion no valida. No se exportaran los datos.")
 
 
 def registrar_cliente():
@@ -786,15 +727,177 @@ def registrar_sala():
         print(e)
 
 
+def cancelar_reservacion():
+    intento_fecha1 = 0
+    while True:
+        fecha_inicio_str = input("Ingresa la fecha de inicio (MM-DD-AAAA): ").strip()
+        if fecha_inicio_str == "":
+            intento_fecha1 += 1
+            if intento_fecha1 >= 2:
+                print("No ingresaste una fecha. Presiona ENTER para regresar al menu.")
+                fecha_inicio_str = input(
+                    "Ingresa la fecha de inicio (MM-DD-AAAA): "
+                ).strip()
+                if fecha_inicio_str == "":
+                    return
+            else:
+                print("No ingresaste una fecha. Intentalo de nuevo.")
+                continue
+        try:
+            fecha_inicio = datetime.datetime.strptime(
+                fecha_inicio_str, "%m-%d-%Y"
+            ).date()
+        except ValueError:
+            print("Error en el formato de fechas, use MM-DD-AAAA.")
+            continue
+        break
+
+    intento_fecha2 = 0
+    while True:
+        fecha_fin_str = input("Ingresa la fecha de fin (MM-DD-AAAA): ").strip()
+        if fecha_fin_str == "":
+            intento_fecha2 += 1
+            if intento_fecha2 >= 2:
+                print("No ingresaste una fecha. Presiona ENTER para regresar al menu.")
+                fecha_fin_str = input("Ingresa la fecha de fin (MM-DD-AAAA): ").strip()
+                if fecha_fin_str == "":
+                    return
+            else:
+                print("No ingresaste una fecha. Intentalo de nuevo.")
+                continue
+        try:
+            fecha_fin = datetime.datetime.strptime(fecha_fin_str, "%m-%d-%Y").date()
+        except ValueError:
+            print("Error en el formato de fechas, use MM-DD-AAAA.")
+            continue
+        break
+
+    fecha_inicio_iso = fecha_inicio.strftime("%Y-%m-%d")
+    fecha_fin_iso = fecha_fin.strftime("%Y-%m-%d")
+
+    try:
+        with sqlite3.connect("coworking.db") as conexion:
+            cursor = conexion.cursor()
+            cursor.execute(
+                """SELECT r.id_reservaciones, c.nombre || ' ' || c.apellido AS cliente, r.id_sala, r.fecha, t.turno, r.evento
+                   FROM Reservaciones r
+                   JOIN Clientes c ON r.id_cliente = c.id_cliente
+                   JOIN Salas s ON r.id_sala = s.id_sala
+                   JOIN Turnos t ON r.id_turno = t.id_turno
+                   WHERE r.estatus = 'Activa'
+                   ORDER BY r.fecha ASC"""
+            )
+            filas = cursor.fetchall()
+    except Error as e:
+        print(e)
+        return
+
+    reservaciones = [
+        fila
+        for fila in filas
+        if fecha_inicio_iso
+        <= datetime.datetime.strptime(fila[3], "%Y-%m-%d").strftime("%Y-%m-%d")
+        <= fecha_fin_iso
+    ]
+
+    if not reservaciones:
+        print("No hay reservaciones en el rango indicado.")
+        return
+
+    print("*" * 104)
+    print(f"**{'RESERVACIONES ENCONTRADAS':^100}** ")
+    print("*" * 104)
+    print(
+        "{:<12} {:<35} {:<10} {:<12} {:<10} {:<25}".format(
+            "ID Reserva",
+            "Cliente",
+            "ID Sala",
+            "Fecha",
+            "Turno",
+            "Nombre evento",
+        )
+    )
+    print("*" * 104)
+
+    for reserva in reservaciones:
+        fecha_evento = datetime.datetime.strptime(reserva[3], "%Y-%m-%d").strftime(
+            "%m-%d-%Y"
+        )
+        print(
+            "{:<12} {:<35} {:<10} {:<12} {:<10} {:<25}".format(
+                reserva[0],
+                reserva[1],
+                reserva[2],
+                fecha_evento,
+                reserva[4],
+                reserva[5],
+            )
+        )
+    else:
+        print("*" * 104)
+
+    while True:
+        entrada = input(
+            "Ingrese el ID de la reservación a cancelar (ENTER para salir): "
+        ).strip()
+        if entrada == "":
+            print("Operación cancelada.")
+            return
+        try:
+            id_reservacion = int(entrada)
+        except ValueError:
+            print("Debe ingresar un número válido.")
+            continue
+        if id_reservacion not in [r[0] for r in reservaciones]:
+            print("Folio no válido. Intente nuevamente.")
+            continue
+        break
+    hoy = datetime.date.today()
+    fecha_evento = datetime.datetime.strptime(
+        [r[3] for r in reservaciones if r[0] == id_reservacion][0], "%Y-%m-%d"
+    ).date()
+    if (fecha_evento - hoy).days < 2:
+        print("La reservación no puede cancelarse con menos de 2 días de anticipación.")
+        return
+    confirmacion = (
+        input(
+            f"Confirma que desea cancelar la reservación {id_reservacion}? Si (S) / No (Cualquier otra tecla.) (Presiona ENTER para cancelar y volver al menu.): "
+        )
+        .strip()
+        .upper()
+    )
+    if confirmacion != "S":
+        print("Operación cancelada por el usuario.")
+        return
+    try:
+        with sqlite3.connect("coworking.db") as conexion:
+            cursor = conexion.cursor()
+            cursor.execute(
+                "UPDATE Reservaciones SET estatus = 'Cancelada', fecha = NULL, id_turno = NULL WHERE id_reservaciones = ?",
+                (id_reservacion,),
+            )
+        print(f"Reservación {id_reservacion} cancelada exitosamente.")
+    except Error as e:
+        print(e)
+
+
 def exportar_csv():
     """Exporta las reservaciones a un archivo CSV"""
     try:
         with sqlite3.connect("coworking.db") as conexion:
             cursor = conexion.cursor()
-            cursor.execute(
-                "SELECT  r.id_reservaciones, c.nombre || ' ' || c.apellido AS nombre_cliente, s.nombre AS nombre_sala, r.fecha, r.turno," \
-                " r.evento FROM Reservaciones r JOIN Clientes c ON r.id_cliente = c.id_cliente JOIN Salas s ON r.id_sala = s.id_sala ORDER BY r.fecha ASC"
-            )
+            cursor.execute("""SELECT r.id_reservaciones,
+              c.nombre || ' ' || c.apellido AS nombre_cliente,
+              s.nombre AS nombre_sala,
+              r.fecha,
+              t.turno,
+              r.evento
+       FROM Reservaciones r
+       JOIN Clientes c ON r.id_cliente = c.id_cliente
+       JOIN Salas s ON r.id_sala = s.id_sala
+       JOIN Turnos t ON r.id_turno = t.id_turno
+       WHERE r.estatus = 'Activa' 
+       ORDER BY r.fecha ASC""")
             reservaciones = cursor.fetchall()
     except Error as e:
         print(e)
@@ -821,13 +924,16 @@ def exportar_csv():
             writer.writerow(["-" * 7, "-" * 30, "-" * 20, "-" * 12, "-" * 10, "-" * 25])
 
             for fila in reservaciones:
-                id_reservacion, id_cliente, id_sala, fecha, turno, evento = fila
+                id_reservacion, nombre_cliente, nombre_sala, fecha, turno, evento = fila
+                fecha_formateada = datetime.datetime.strptime(
+                    fecha, "%Y-%m-%d"
+                ).strftime("%m-%d-%Y")
                 writer.writerow(
                     [
                         str(id_reservacion).ljust(7),
-                        str(id_cliente).ljust(30),
-                        str(id_sala).ljust(20),
-                        fecha.ljust(12),
+                        nombre_cliente.ljust(30),
+                        nombre_sala.ljust(20),
+                        fecha_formateada.ljust(12),
                         turno.ljust(10),
                         evento.ljust(25),
                     ]
@@ -843,10 +949,18 @@ def exportar_excel():
     try:
         with sqlite3.connect("coworking.db") as conexion:
             cursor = conexion.cursor()
-            cursor.execute(
-                "SELECT  r.id_reservaciones, c.nombre || ' ' || c.apellido AS nombre_cliente, s.nombre AS nombre_sala," \
-                " r.fecha, r.turno, r.evento FROM Reservaciones r JOIN Clientes c ON r.id_cliente = c.id_cliente JOIN Salas s ON r.id_sala = s.id_sala ORDER BY r.fecha ASC"
-            )
+            cursor.execute("""SELECT r.id_reservaciones,
+              c.nombre || ' ' || c.apellido AS nombre_cliente,
+              s.nombre AS nombre_sala,
+              r.fecha,
+              t.turno,
+              r.evento
+       FROM Reservaciones r
+       JOIN Clientes c ON r.id_cliente = c.id_cliente
+       JOIN Salas s ON r.id_sala = s.id_sala
+       JOIN Turnos t ON r.id_turno = t.id_turno
+       WHERE r.estatus = 'Activa' 
+       ORDER BY r.fecha ASC""")
             reservaciones = cursor.fetchall()
     except Error as e:
         print(e)
@@ -878,7 +992,19 @@ def exportar_excel():
         celda.border = borde_grueso
 
     for fila, dato in enumerate(reservaciones, start=4):
-        for col, valor in enumerate(dato, start=1):
+        id_reservacion, nombre_cliente, nombre_sala, fecha, turno, evento = dato
+        fecha_formateada = datetime.datetime.strptime(fecha, "%Y-%m-%d").strftime(
+            "%m-%d-%Y"
+        )
+        valores = [
+            id_reservacion,
+            nombre_cliente,
+            nombre_sala,
+            fecha_formateada,
+            turno,
+            evento,
+        ]
+        for col, valor in enumerate(valores, start=1):
             celda = ws.cell(row=fila, column=col, value=valor)
             celda.alignment = Alignment(horizontal="center")
 
@@ -898,11 +1024,18 @@ def exportar_json():
     try:
         with sqlite3.connect("coworking.db") as conexion:
             cursor = conexion.cursor()
-            cursor.execute(
-                "SELECT  r.id_reservaciones, c.nombre || ' ' || c.apellido AS nombre_cliente," \
-                " s.nombre AS nombre_sala, r.fecha, r.turno," \
-                " r.evento FROM Reservaciones r JOIN Clientes c ON r.id_cliente = c.id_cliente JOIN Salas s ON r.id_sala = s.id_sala ORDER BY r.fecha ASC"
-            )
+            cursor.execute("""SELECT r.id_reservaciones,
+              c.nombre || ' ' || c.apellido AS nombre_cliente,
+              s.nombre AS nombre_sala,
+              r.fecha,
+              t.turno,
+              r.evento
+       FROM Reservaciones r
+       JOIN Clientes c ON r.id_cliente = c.id_cliente
+       JOIN Salas s ON r.id_sala = s.id_sala
+       JOIN Turnos t ON r.id_turno = t.id_turno
+       WHERE r.estatus = 'Activa' 
+       ORDER BY r.fecha ASC""")
             reservaciones = cursor.fetchall()
     except Error as e:
         print(e)
@@ -914,12 +1047,15 @@ def exportar_json():
 
     lista = []
     for idr, cliente, sala, fecha, turno, evento in reservaciones:
+        fecha_formateada = datetime.datetime.strptime(fecha, "%Y-%m-%d").strftime(
+            "%m-%d-%Y"
+        )
         lista.append(
             {
                 "Clave": idr,
                 "Cliente": cliente,
                 "Sala": sala,
-                "Fecha": fecha,
+                "Fecha": fecha_formateada,
                 "Turno": turno,
                 "Evento": evento,
             }
@@ -940,9 +1076,9 @@ def main():
         print("1. Registrar nueva reservacion.")
         print("2. Editar nombre de reservacion.")
         print("3. Consultar reservaciones.")
-        print("4. Registrar nuevo cliente.")
-        print("5. Registrar nueva sala.")
-        print("6. Cancelar reservación.")
+        print("4. Cancelar reservacion.")
+        print("5. Registrar nuevo cliente.")
+        print("6. Registrar nueva sala.")
         print("7. Salir.\n")
         opcion = input("Selecciona la opcion que necesites (1-7): ")
         if opcion.isdigit():
@@ -953,16 +1089,18 @@ def main():
             elif opcion == "3":
                 consultar_reservacion()
             elif opcion == "4":
-                registrar_cliente()
-            elif opcion == "5":
-                registrar_sala()
-            elif opcion == "6":
                 cancelar_reservacion()
+            elif opcion == "5":
+                registrar_cliente()
+            elif opcion == "6":
+                registrar_sala()
             elif opcion == "7":
-                salir = input("¿Desea salir realmente? s/n: ").lower()
-            if salir == "s":
-                print("Saliendo del programa...")
-                break
+                salir = input(
+                    "¿Desea salir realmente? Si (s) / No (Presione cualquier otra tecla): "
+                ).lower()
+                if salir == "s":
+                    print("Saliendo del programa...")
+                    break
             else:
                 print("Error, ingrese una opción valida")
         else:
@@ -971,3 +1109,5 @@ def main():
 
 if __name__ == "__main__":
     iniciar_bd()
+    existente = verificar_estado_inicial()
+    main()
